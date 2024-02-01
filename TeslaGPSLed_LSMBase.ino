@@ -10,7 +10,7 @@ LSM303 compass;
 #define LED_COUNT 144 //number of leds in that array
 #define LED_PIN 3 //rgb led attached to D3
 #define GPSECHO  false
-#define SERIALECHO true //speed and accel output
+#define SERIALECHO false //speed and accel output
 #define TESTDATA true //pseudo data
 
 SoftwareSerial mySerial(8, 7);
@@ -85,9 +85,9 @@ void loop()
           velocity = velocity+=0.75; 
         if (velocity < 110)
           velocity = velocity+=0.55; 
-        if (velocity < 140)
+        if (velocity < 150)
           velocity = velocity+=0.25;
-        if (velocity > 140)
+        if (velocity > 150)
           velocity = 0;
       }
       else
@@ -100,16 +100,16 @@ void loop()
         return;  // we can fail to parse a sentence in which case we should just wait for another
   }
 
-  if (millis() - timer > 10) {
+  if (millis() - timer > 5) {
 //     compass.read();
      accel = 0;
-     for(int j=0; j<3; j+=1){ //get 10 values
+     for(int j=0; j<2; j+=1){ //get 10 values
         compass.read();
         accel = (accel+-compass.a.y/16000.0*9.81)-Ycal; //conv from adc to g's to m/s^2
      }
-     accel = abs(accel/3.0); //avg them
+     accel = abs(accel/2.0); //avg them
      
-     velocity = velocity + accel*(15.0/1000.0); //if no datareceived from gps, estimate speed from accel
+     velocity = velocity + accel*(5.0/1000.0); //if no datareceived from gps, estimate speed from accel
      
      
      if (velocity < 60){
@@ -125,31 +125,36 @@ void loop()
         value = map(accel*100.0,100,800,100,255); //accel to brightness
      }
      else{
-        firstPixelHue = map(velocity*10.0, 1000, 1550, 0, -15922);
+        firstPixelHue = map(velocity*10.0, 1000, 1400, 0, -15922);
         if (accel >= 7)
           accel = 7;
         value = map(accel*100.0,0,700,100,255); //accel to brightness
      }
-//     for(int i=0; i<(leds.numPixels()/2)+1; i++) { // For each pixel in strip...
+     int diffHue = firstPixelHue - tempHue;
+     int diffValue = value - tempValue;
+  
+     for(int i=0; i<(leds.numPixels()/2)+1; i++) { // For each pixel in strip...
+       int pixelHue = firstPixelHue + (i * 0.2*65536L / leds.numPixels());
+       leds.setPixelColor(i, leds.gamma32(leds.ColorHSV(pixelHue, 255, value)));
+       leds.setPixelColor(144-i, leds.gamma32(leds.ColorHSV(pixelHue, 255, value)));
+     }
+  
+     leds.show();
+     timer = millis(); // reset the timer
+  
+  }
+
+  //final write to leds
+//  int diffHue = firstPixelHue - tempHue;
+//  int diffValue = value - tempValue;
+//  
+//  for(int i=0; i<(leds.numPixels()/2)+1; i++) { // For each pixel in strip...
 //     int pixelHue = firstPixelHue + (i * 0.2*65536L / leds.numPixels());
 //     leds.setPixelColor(i, leds.gamma32(leds.ColorHSV(pixelHue, 255, value)));
 //     leds.setPixelColor(144-i, leds.gamma32(leds.ColorHSV(pixelHue, 255, value)));
 //   }
 //
 //   leds.show();
-     timer = millis(); // reset the timer
-  
-  }
-
-  //final write to leds
-  int diffHue = 
-  for(int i=0; i<(leds.numPixels()/2)+1; i++) { // For each pixel in strip...
-     int pixelHue = firstPixelHue + (i * 0.2*65536L / leds.numPixels());
-     leds.setPixelColor(i, leds.gamma32(leds.ColorHSV(pixelHue, 255, value)));
-     leds.setPixelColor(144-i, leds.gamma32(leds.ColorHSV(pixelHue, 255, value)));
-   }
-
-   leds.show();
 }
 
 void startupAnimation(){
