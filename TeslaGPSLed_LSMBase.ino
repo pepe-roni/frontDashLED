@@ -11,7 +11,7 @@ LSM303 compass;
 #define LED_PIN 3 //rgb led attached to D3
 #define GPSECHO  false
 #define SERIALECHO false //speed and accel output
-#define TESTDATA true //pseudo data
+#define TESTDATA false //pseudo data
 
 SoftwareSerial mySerial(8, 7);
 Adafruit_GPS GPS(&mySerial);
@@ -100,7 +100,7 @@ void loop()
         return;  // we can fail to parse a sentence in which case we should just wait for another
   }
 
-  if (millis() - timer > 5) {
+  if (millis() - timer > 10) {
 //     compass.read();
      accel = 0;
      for(int j=0; j<2; j+=1){ //get 10 values
@@ -109,7 +109,7 @@ void loop()
      }
      accel = abs(accel/2.0); //avg them
      
-     velocity = velocity + accel*(5.0/1000.0); //if no datareceived from gps, estimate speed from accel
+     velocity = velocity + accel*((millis() - timer)/1000.0); //if no datareceived from gps, estimate speed from accel
      
      
      if (velocity < 60){
