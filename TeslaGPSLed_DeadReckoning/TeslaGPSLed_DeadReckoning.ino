@@ -20,7 +20,7 @@ void setup()
   Wire.begin(22,23);
   Wire.setClock(400000);
   
-  Serial.begin(115200);
+  Serial.begin(500000);
   while (!Serial);
   Serial.println(F("Tesla GPS DR LEDs"));
   if (myGNSS.begin() == false) //Connect to the u-blox module using Wire port
@@ -44,12 +44,24 @@ void setup()
     }
   }
   
-  myGNSS.setNavigationFrequency(15); //Set output to 5 times a second
+  myGNSS.setNavigationFrequency(20); //Set output to 5 times a second
   uint8_t rate = myGNSS.getNavigationFrequency(); //Get the update rate of this module
+  
 //  uint8_t fixType = myGNSS.getFixType();
+
   Serial.print("Current update rate: ");
   Serial.println(rate);
-//  Serial.println(int(fixType));                                                                                                                  );
+
+  // uint16_t rate = myGNSS.getMeasurementRate(); //Get the measurement rate of this module
+  // Serial.print("New measurement interval (ms): ");
+  // Serial.println(rate);
+
+  // myGNSS.setMeasurementRate(50); //Produce a measurement every 1000ms
+  // myGNSS.setNavigationRate(2); 
+  // uint8_t rate = myGNSS.getNavigationRate(); //Get the navigation rate of this module
+  // Serial.print("New navigation ratio (cycles): ");
+  // Serial.print(rate); 
+  // Serial.println();
   startupAnimation();
 }
 
@@ -57,31 +69,33 @@ unsigned long lastTime = 0; //Simple local timer. Limits amount if I2C traffic t
 
 void loop()
 {
-  if (millis() - lastTime > 25)
+  if (millis() - lastTime > 15)
   {
+    Serial.print("Lasttime: ");
+    Serial.print(millis()-lastTime);
     lastTime = millis(); //Update the timer
-    
-    float velocity = myGNSS.getGroundSpeed();
-    Serial.print(F("Ground Speed (MPH): "));
-    Serial.print(velocity/447.04);
-    
-    Serial.println();
-    Serial.print(F("X Ang Rate: "));
-    Serial.print(myGNSS.packetUBXESFINS->data.xAngRate);  
-    Serial.print(F(" Y Ang Rate: "));
-    Serial.print(myGNSS.packetUBXESFINS->data.yAngRate);  
-    Serial.print(F(" Z Ang Rate: "));
-    Serial.print(myGNSS.packetUBXESFINS->data.zAngRate);  
-    Serial.print(F(" X Accel: "));
-    Serial.print(myGNSS.packetUBXESFINS->data.xAccel);  
-    Serial.print(F(" Y Accel: "));
-    Serial.print(myGNSS.packetUBXESFINS->data.yAccel);  
-    Serial.print(F(" Z Accel: "));
-    Serial.print(myGNSS.packetUBXESFINS->data.zAccel);
-    Serial.println();
-  }
 
+    float velocity = myGNSS.getGroundSpeed();
+    Serial.print(F(" | Ground Speed (MPH): "));
+    Serial.print(velocity/447.04);
+  //   if (myGNSS.getNAVVELNED())
+  // {
+  //   // Serial.print(F("velN: "));
+  //   // Serial.print((float)myGNSS.packetUBXNAVVELNED->data.velN / 100.0, 2); // convert velN to m/s
+
+  //   Serial.print(F(" velE: "));
+  //   Serial.print((float)myGNSS.packetUBXNAVVELNED->data.velE / 100.0, 2); // convert velE to m/s
+
+  //   // Serial.print(F(" velD: "));
+  //   // Serial.print((float)myGNSS.packetUBXNAVVELNED->data.velD / 100.0, 2); // convert velD to m/s
+  //   Serial.println(F(" (m/s)"));
+
+  //   myGNSS.flushNAVVELNED(); //Mark all the data as read/stale so we get fresh data next time
+  // }
   
+    Serial.println();
+
+  }
 }
 
 void startupAnimation(){
