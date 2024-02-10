@@ -1,5 +1,5 @@
 #include <Wire.h> //Needed for I2C to GNSS
-#include <Adafruit_NeoPixel.h>
+#include <FastLED.h>
 #include <SparkFun_u-blox_GNSS_Arduino_Library.h> 
 
 #define LED_COUNT 144 //number of leds in that array
@@ -7,16 +7,14 @@
 #define SERIALECHO true
 
 SFE_UBLOX_GNSS myGNSS;
-Adafruit_NeoPixel leds(LED_COUNT, LED_PIN, NEO_GRB +NEO_KHZ800);
+CRGBArray<LED_COUNT> leds;
 
 uint16_t hueValue = 0;
-uint32_t color = leds.ColorHSV(hueValue);
+// uint32_t color = leds.ColorHSV(hueValue);
 
 void setup()
 {
-  leds.begin();
-  leds.show(); 
-  leds.setBrightness(155);
+  FastLED.addLeds<NEOPIXEL,4>(leds, LED_COUNT);
   Wire.begin(22,23);
   Wire.setClock(400000);
   
@@ -30,6 +28,8 @@ void setup()
   }
 
   myGNSS.setI2COutput(COM_TYPE_UBX); //Set the I2C port to output UBX only (turn off NMEA noise)
+  myGNSS.saveConfigSelective(VAL_CFG_SUBSEC_IOPORT); //Save (only) the communications port settings to flash and BBR
+
   if (myGNSS.getEsfInfo()){
 
     Serial.print(F("Fusion Mode: "));
@@ -43,25 +43,17 @@ void setup()
       Serial.println(F("Please see the previous example for more information."));
     }
   }
-  
-  myGNSS.setNavigationFrequency(20); //Set output to 5 times a second
+  myGNSS.setAutoHNRATT(false); //Make sure auto HNR attitude messages are disabled
+  myGNSS.setAutoHNRINS(false); //Make sure auto HNR vehicle dynamics messages are disabled
+  myGNSS.setAutoHNRPVT(false); //Make sure auto HNR PVT messages are disabled
+
+  myGNSS.setNavigationFrequency(30); //Set output to 5 times a second
+  myGNSS.setHNRNavigationRate(30);
   uint8_t rate = myGNSS.getNavigationFrequency(); //Get the update rate of this module
-  
-//  uint8_t fixType = myGNSS.getFixType();
 
   Serial.print("Current update rate: ");
   Serial.println(rate);
 
-  // uint16_t rate = myGNSS.getMeasurementRate(); //Get the measurement rate of this module
-  // Serial.print("New measurement interval (ms): ");
-  // Serial.println(rate);
-
-  // myGNSS.setMeasurementRate(50); //Produce a measurement every 1000ms
-  // myGNSS.setNavigationRate(2); 
-  // uint8_t rate = myGNSS.getNavigationRate(); //Get the navigation rate of this module
-  // Serial.print("New navigation ratio (cycles): ");
-  // Serial.print(rate); 
-  // Serial.println();
   startupAnimation();
 }
 
@@ -75,55 +67,50 @@ void loop()
     Serial.print(millis()-lastTime);
     lastTime = millis(); //Update the timer
 
-    float velocity = myGNSS.getGroundSpeed();
-    Serial.print(F(" | Ground Speed (MPH): "));
-    Serial.print(velocity/447.04);
-  //   if (myGNSS.getNAVVELNED())
-  // {
-  //   // Serial.print(F("velN: "));
-  //   // Serial.print((float)myGNSS.packetUBXNAVVELNED->data.velN / 100.0, 2); // convert velN to m/s
+    // float velocity = myGNSS.getGroundSpeed();
+    // Serial.print(F(" | Ground Speed (MPH): "));
+    // Serial.print(velocity/447.04);
 
-  //   Serial.print(F(" velE: "));
-  //   Serial.print((float)myGNSS.packetUBXNAVVELNED->data.velE / 100.0, 2); // convert velE to m/s
+    if (myGNSS.getHNRDyn(125) == true) // Request HNR Dyn data using a 125ms timeout
+    {
+      Serial.print(F(" yAccel: "));
+      Serial.print(myGNSS.packetUBXHNRINS->data.yAccel);
+      Serial.print(F(" yVel: "));
+      Serial.print(myGNSS.packetUBXHNRINS->data.yAngRate);
+    }
 
-  //   // Serial.print(F(" velD: "));
-  //   // Serial.print((float)myGNSS.packetUBXNAVVELNED->data.velD / 100.0, 2); // convert velD to m/s
-  //   Serial.println(F(" (m/s)"));
-
-  //   myGNSS.flushNAVVELNED(); //Mark all the data as read/stale so we get fresh data next time
-  // }
-  
     Serial.println();
-
   }
+
+  
 }
 
 void startupAnimation(){
-  uint16_t hue = 230;
-  uint32_t fillColor;
-  for(int i=0; i<250; i+=2){
-    fillColor = leds.gamma32(leds.ColorHSV(hue*65536/361,250,i));
-    leds.fill(fillColor);
-    delay(1);
-    leds.show();
-  }
-  for(int i=250; i>1; i-=2){
-    fillColor = leds.gamma32(leds.ColorHSV(hue*65536/361,i,250));
-    leds.fill(fillColor);
-    delay(1);
-    leds.show();
-  }
-  hue = 30;
-   for(int i=0; i<255; i+=2){
-    fillColor = leds.gamma32(leds.ColorHSV(hue*65536/361,i,250));
-    leds.fill(fillColor);
-    delay(1);
-    leds.show();
-  }
-  for(int i=250; i>0; i-=2){
-    fillColor = leds.gamma32(leds.ColorHSV(hue*65536/361,255,i));
-    leds.fill(fillColor);
-    delay(1);
-    leds.show();
-  }
+  // uint16_t hue = 230;
+  // uint32_t fillColor;
+  // for(int i=0; i<250; i+=2){
+  //   fillColor = leds.gamma32(leds.ColorHSV(hue*65536/361,250,i));
+  //   leds.fill(fillColor);
+  //   delay(1);
+  //   leds.show();
+  // }
+  // for(int i=250; i>1; i-=2){
+  //   fillColor = leds.gamma32(leds.ColorHSV(hue*65536/361,i,250));
+  //   leds.fill(fillColor);
+  //   delay(1);
+  //   leds.show();
+  // }
+  // hue = 30;
+  //  for(int i=0; i<255; i+=2){
+  //   fillColor = leds.gamma32(leds.ColorHSV(hue*65536/361,i,250));
+  //   leds.fill(fillColor);
+  //   delay(1);
+  //   leds.show();
+  // }
+  // for(int i=250; i>0; i-=2){
+  //   fillColor = leds.gamma32(leds.ColorHSV(hue*65536/361,255,i));
+  //   leds.fill(fillColor);
+  //   delay(1);
+  //   leds.show();
+  // }
 }
