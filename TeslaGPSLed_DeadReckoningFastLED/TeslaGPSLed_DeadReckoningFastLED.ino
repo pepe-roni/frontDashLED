@@ -4,7 +4,7 @@
 
 #define LED_COUNT 144 //number of leds in that array
 #define LED_PIN 32 //rgb led attached to D32
-#define SERIALECHO true
+#define SERIALECHO false
 #define TESTDATA false
 // #define SWITCHPIN 
 
@@ -56,11 +56,16 @@ void setup()
   myGNSS.setNavigationFrequency(18); //Set output to 5 times a second
   myGNSS.setHNRNavigationRate(30);
   Serial.println("Current update rate: 30Hz");
-  Serial.print(myGNSS.getHour());
+  Serial.print(myGNSS.getHour()); //universal time
   Serial.print(":");
   Serial.print(myGNSS.getMinute());
   Serial.println();
   startupAnimation();
+  if(myGNSS.getHour()>2 && myGNSS.getHour()<15){
+    setBrightness = 40;
+  }
+  else
+    setBrightness = 255;
 }
 
 unsigned long lastTime = 0; //Simple local timer. Limits amount if I2C traffic to u-blox module.
@@ -178,20 +183,20 @@ void fastLEDHandler(float velocity, bool usePalette){
       firstPixelHue = map(velocity*100.0, 0, 6000, 16000,8000)/100.0; //velocity to hue
     }
     else if (velocity < 100){
-      firstPixelHue = map(velocity*100.0, 6000, 10000, 8000, -2000)/100.0;
+      firstPixelHue = map(velocity*100.0, 6000, 10000, 8000, 0)/100.0;
     }
     else{
-      firstPixelHue = map(velocity*100.0, 10000, 14000, -2000, -7000)/100.0;
+      firstPixelHue = map(velocity*100.0, 10000, 14000, 0, -7000)/100.0;
     }
   }
 
-  for(int i = 0; i < LED_COUNT/2; i++) { 
-    int pixelHue = firstPixelHue + (i * 255*(0.2 + 0.1*velocity/150) / LED_COUNT);  //multiplier increase shows higher variance
+  for(int i = 0; i < LED_COUNT/2+1; i++) { 
+    int pixelHue = firstPixelHue + (i * 255*(0.2 + 0.2*velocity/150) / LED_COUNT);  //multiplier increase shows higher variance
     // leds.fadeToBlackBy(40);
     if (usePalette)
       leds[i] = ColorFromPalette(myPalette,index);
     else
-      leds[LED_COUNT/2 - i] = CHSV(pixelHue,255,setBrightness+(accel*70));
+      leds[LED_COUNT/2 - i] = CHSV(pixelHue,255,setBrightness);
 
     leds(LED_COUNT/2,LED_COUNT-1) = leds(LED_COUNT/2 - 1 ,0);
     // FastLED.show();
