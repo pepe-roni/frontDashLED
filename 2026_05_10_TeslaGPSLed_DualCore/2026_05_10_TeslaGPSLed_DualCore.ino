@@ -7,7 +7,7 @@
 #define LED_PIN 32
 #define GPS_SDA 21
 #define GPS_SCL 22
-#define SERIALECHO false
+#define SERIALECHO true
 #define TESTDATA false
 
 #define FRAMETIME 16 // ~60Hz refresh rate (1000ms / 60)
@@ -35,19 +35,20 @@ void LEDTask(void * pvParameters);
 void setup()
 {
   Serial.begin(115200);
+  delay(500);
   Serial.println(F("Tesla GPS DR LEDs - Direct ESF IMU Acceleration Edition"));
 
   FastLED.addLeds<NEOPIXEL, LED_PIN>(leds, LED_COUNT);
   
   Wire.begin(GPS_SDA, GPS_SCL);
   Wire.setClock(400000); // Fast I2C
-  u8g2.begin();
-
+  // u8g2.begin();
+  
   if (myGNSS.begin() == false){ 
     Serial.println(F("u-blox GNSS not detected. Freezing."));
     resetFunc();
   }
-
+  myGNSS.setESFAutoAlignment(true);
   myGNSS.setPortOutput(COM_PORT_I2C, COM_TYPE_UBX);
   myGNSS.setI2COutput(COM_TYPE_UBX); 
   myGNSS.saveConfigSelective(VAL_CFG_SUBSEC_IOPORT); 
@@ -82,9 +83,13 @@ void setup()
     delay(5000);
     startupAnimation();
   }
+  //good fix
+  Serial.print("Sat Connected: ");
+  Serial.println(myGNSS.getSIV());
+  delay(500);
   
   if(myGNSS.getHour() > 2 && myGNSS.getHour() < 15){
-    setBrightness = 40;
+    setBrightness = 80;
   } else {
     setBrightness = 255;
   }
@@ -154,7 +159,7 @@ void loop()
       u8g2.drawStr(48, 25, "MPH");
 
       // 2. DRAW NUMERICAL Gs (Left Side Bottom)
-      char gString[16];
+      char gString[64];
       sprintf(gString, "La:%.2f Lo:%.2f", accel_lat, accel_long);
       u8g2.setFont(u8g2_font_6x10_tf);
       u8g2.drawStr(0, 58, gString);
