@@ -7,8 +7,10 @@
 #define LED_PIN 32
 #define GPS_SDA 21
 #define GPS_SCL 22
-#define SERIALECHO true
+#define SERIALECHO false
 #define TESTDATA false
+#define NAV_RATE 1
+#define HNR_RATE 30
 
 #define FRAMETIME 16 // ~60Hz refresh rate (1000ms / 60)
 
@@ -74,13 +76,23 @@ void setup()
   myGNSS.setI2COutput(COM_TYPE_UBX); 
   myGNSS.saveConfigSelective(VAL_CFG_SUBSEC_IOPORT); 
 
+  // Disable standard message noise
+  myGNSS.setAutoHNRATT(false);
+  myGNSS.setAutoHNRINS(true); 
+  myGNSS.setAutoHNRPVT(true); 
+
+  myGNSS.checkUblox();
+  myGNSS.getEsfInfo();
+
 // Ensure the pointer is NOT null FIRST, then check the fusion mode value
   if (myGNSS.packetUBXESFSTATUS != NULL && myGNSS.packetUBXESFSTATUS->data.fusionMode == 1) {
-    u8g2.drawStr(0, 40, "Fusion Configured.");
+    u8g2.drawStr(0, 40, "Fusion RDY.");
     u8g2.sendBuffer();
   }
   else {
-    u8g2.drawStr(0, 40, "Fusion not configured.");
+    char fusString[16];
+    sprintf(fusString, "Fusion NOT RDY: %d", myGNSS.packetUBXESFSTATUS->data.fusionMode);
+    u8g2.drawStr(0, 40, fusString);
     u8g2.sendBuffer();
   }
 
@@ -93,15 +105,12 @@ void setup()
     }
   u8g2.sendBuffer();
 
-  // Disable standard message noise
-  myGNSS.setAutoHNRATT(false);
-  myGNSS.setAutoHNRINS(true); 
-  myGNSS.setAutoHNRPVT(true); 
 
   // Configure high update rate safely at 1Hz background
-  myGNSS.setNavigationFrequency(1); 
-  myGNSS.setHNRNavigationRate(30); // 30Hz HNR rate
-  Serial.println("Current update rate: 30Hz");
+  myGNSS.setNavigationFrequency(NAV_RATE); 
+  myGNSS.setHNRNavigationRate(HNR_RATE); // 30Hz HNR rate
+  Serial.print("Current update rate: ");
+  Serial.println(HNR_RATE);
   u8g2.sendBuffer();
 
   delay(1500); // Hold the final diagnostic info on screen briefly before animation
@@ -110,7 +119,9 @@ void setup()
   // Wait for satellite geometry lock
   u8g2.clearBuffer();
   u8g2.drawStr(0, 24, "Waiting for Sat...");
-  u8g2.drawStr(0, 40, "Nav: 1Hz | HNR: 30Hz");
+  char rateString[24];
+  sprintf(rateString, "Nav: %dHz | HNR: %dHz", NAV_RATE, HNR_RATE);
+  u8g2.drawStr(0, 40, rateString);
   u8g2.sendBuffer();
 
   while (!myGNSS.getGnssFixOk() && myGNSS.getSIV() < 2) {
@@ -129,7 +140,7 @@ void setup()
   // Satellites connected successfully
   Serial.print("Sat Connected: ");
   Serial.println(myGNSS.getSIV());
-  
+  delay(1000);
   u8g2.clearBuffer();
   u8g2.drawStr(0, 24, "GNSS Lock Confirmed!");
   char finalSiv[16];
@@ -139,7 +150,7 @@ void setup()
   delay(1500);
   
   if(myGNSS.getHour() > 2 && myGNSS.getHour() < 15){
-    setBrightness = 80;
+    setBrightness = 90;
   } else {
     setBrightness = 255;
   }
@@ -178,10 +189,11 @@ void loop()
       
       // 1. Update velocity from High Navigation Rate PVT (in mm/s)
       velocity = myGNSS.packetUBXHNRPVT->data.gSpeed;
-      float rawLat = myGNSS.packetUBXHNRINS->data.xAccel; 
+      float rawLat = myGNSS.packetUBXHNRINS->data.yAccel; 
       accel_lat = (rawLat / 100.0) / 9.81;
-      float rawLong = myGNSS.packetUBXHNRINS->data.yAccel; 
+      float rawLong = myGNSS.packetUBXHNRINS->data.xAccel; 
       accel_long = (rawLong / 100.0) / 9.81;
+      float totalAccel = sqrtf((accel_lat * accel_lat)+ (accel_long * accel_long));
       uint8_t fusionMode = 0; 
       uint8_t alignStatus = 0;
       if (myGNSS.packetUBXESFSTATUS != NULL) {
@@ -189,7 +201,10 @@ void loop()
         fusionMode = myGNSS.packetUBXESFSTATUS->data.fusionMode;
       }
       // Correctly get Satellites In View using the library helper
-      uint8_t satCount = myGNSS.getSIV();
+      uint8_t satCount = 0;
+      if (myGNSS.packetUBXNAVPVT != NULL){
+        satCount = myGNSS.packetUBXNAVPVT ->data.numSV;
+      }
       
       // Mark the HNR INS data as read/stale so we only process fresh packets
       myGNSS.flushHNRINS();
@@ -204,7 +219,7 @@ void loop()
       u8g2.clearBuffer();
       
       // 1. DRAW SPEED (Left Side)
-      u8g2.setFont(u8g2_font_logisoso20_tf); 
+      u8g2.setFont(u8g2_font_logisoso28_tf); 
       
       // Calculate fixed-point components
       int32_t mphTimesTen = (velocity * 10) / 447.04;
@@ -216,29 +231,22 @@ void loop()
       sprintf(speedString, "%d.%d", wholeMPH, tenthsMPH);
       u8g2.drawStr(0, 30, speedString);
       
-      u8g2.setFont(u8g2_font_helvB08_tr);
-      // Shifted "MPH" right slightly (from 48 to 58) to make room for the new decimal digit
-      u8g2.drawStr(58, 25, "MPH");
-      // u8g2.setFont(u8g2_font_logisoso20_tf); 
-      // char speedString[8];
-      // dtostrf(velocity / 447.04, 3, 0, speedString); // Rounded to nearest MPH to save horizontal space
-      // u8g2.drawStr(0, 30, speedString);
-      
-      // u8g2.setFont(u8g2_font_helvB08_tr);
-      // u8g2.drawStr(48, 25, "MPH");
-      
+      u8g2.setFont(u8g2_font_profont11_tr); //6pt font
+      u8g2.drawStr(92, 10, "MPH");
+
 
       // 2. DRAW NUMERICAL Gs (Left Side Bottom)
-      // char gString[64];
-      // sprintf(gString, "La:%.2f Lo:%.2f", accel_lat, accel_long);
-      // u8g2.setFont(u8g2_font_6x10_tf);
-      // u8g2.drawStr(0, 58, gString);
+      char gString[64];
+      sprintf(gString, "%.2f G", totalAccel);
+      u8g2.setFont(u8g2_font_6x10_tf);
+      u8g2.drawStr(92, 64, gString);
 
       // 3. DRAW G-FORCE PLOT (Right Side)
       int maxRadius = 16; // Reduced from 24 to 16 pixels
       int centerX = 108; // Shifted right from 96 to 108 to hug the screen edge cleanly
       int centerY = 32;  // Keeps the circle perfectly centered vertically
       float maxG = 1.0;   // Keeps the outer edge mapped to 1.0G
+      int dotSize = 2; //px for g dot
 
       // Draw the outer boundary circle
       u8g2.drawCircle(centerX, centerY, maxRadius, U8G2_DRAW_ALL);
@@ -267,7 +275,7 @@ void loop()
       }
 
       // Draw the dynamic G-force "bubble" (a filled 3px radius circle)
-      u8g2.drawDisc(round(targetX), round(targetY), 3, U8G2_DRAW_ALL);
+      u8g2.drawDisc(round(targetX), round(targetY), dotSize, U8G2_DRAW_ALL);
       // --- SMALL BOOT/STATUS INDICATORS (Bottom Edge) ---
       u8g2.setFont(u8g2_font_04b_03_tr); // Ultra-micro 5px tall font
 
@@ -324,7 +332,7 @@ void LEDTask(void * pvParameters){
 
 void fastLEDHandler(float currentVelocity, bool usePalette){
   int firstPixelHue;
-  firstPixelHue = map(currentVelocity * 100.0, 0, 6000, 16000, -9600) / 100.0;
+  firstPixelHue = map(currentVelocity * 100.0, 0, 6000, 16500, -9600) / 100.0;
   // if (currentVelocity < 60){
   //   firstPixelHue = map(currentVelocity * 100.0, 0, 6000, 16000, 8000) / 100.0;
   // }
@@ -336,7 +344,7 @@ void fastLEDHandler(float currentVelocity, bool usePalette){
   // }
 
   for(int i = 0; i < LED_COUNT/2 + 1; i++) { 
-    int pixelHue = firstPixelHue + (i * 255 * (0.2 + 0.2 * currentVelocity / 150) / LED_COUNT);
+    int pixelHue = firstPixelHue + (i * 255 * (0.225 + 0.5 * currentVelocity / 150) / LED_COUNT);
     leds[LED_COUNT/2 - i] = CHSV(pixelHue, 255, setBrightness);
     leds(LED_COUNT/2, LED_COUNT - 1) = leds(LED_COUNT/2 - 1, 0);
   }
