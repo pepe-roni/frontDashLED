@@ -7,16 +7,16 @@
 #define LED_PIN 32
 #define GPS_SDA 21
 #define GPS_SCL 22
-#define SERIALECHO false
+#define SERIALECHO true
 #define TESTDATA false
 #define NAV_RATE 1
 #define HNR_RATE 30
-
 #define FRAMETIME 16 // ~60Hz refresh rate (1000ms / 60)
 
 SFE_UBLOX_GNSS myGNSS;
 CRGBArray<LED_COUNT> leds;
 U8G2_SSD1309_128X64_NONAME0_F_4W_HW_SPI u8g2(U8G2_R2, /* cs= */ 5, /* dc= */ 17, /* reset= */ 16);
+
 
 uint16_t hueValue = 0;
 int setBrightness = 155; 
@@ -27,7 +27,6 @@ void(* resetFunc) (void) = 0;
 volatile float velocity = 0;
 volatile float accel_long = 0; // Longitudinal acceleration (G-force)
 volatile float accel_lat = 0;  // Lateral acceleration (G-force)
-bool sportMode = false;
 
 // FreeRTOS Task Handle for running LEDs on Core 0
 TaskHandle_t LEDTaskHandle = NULL;
@@ -77,10 +76,14 @@ void setup()
   myGNSS.saveConfigSelective(VAL_CFG_SUBSEC_IOPORT); 
 
   // Disable standard message noise
-  myGNSS.setAutoHNRATT(false);
+  myGNSS.setAutoHNRATT(true);
   myGNSS.setAutoHNRINS(true); 
   myGNSS.setAutoHNRPVT(true); 
+  myGNSS.setAutoPVT(true);   // Ensures NAV-PVT (speed, sats, etc) sent automatically
+  myGNSS.setAutoESFSTATUS(true);
+  myGNSS.setAutoESFALG(true);
 
+  delay(1000);
   myGNSS.checkUblox();
   myGNSS.getEsfInfo();
 
@@ -98,10 +101,10 @@ void setup()
 
   if (myGNSS.getYear() > 2025) {
       Serial.println(F("HOT START READY (Time is preserved!)"));
-      u8g2.drawStr(0, 54, "Status: HOT START");
+      u8g2.drawStr(0, 54, "Status: HOT");
     } else {
       Serial.println(F("COLD START (Backup battery is dead or disconnected!)"));
-      u8g2.drawStr(0, 54, "Status: COLD START");
+      u8g2.drawStr(0, 54, "Status: COLD");
     }
   u8g2.sendBuffer();
 
@@ -113,7 +116,7 @@ void setup()
   Serial.println(HNR_RATE);
   u8g2.sendBuffer();
 
-  delay(1500); // Hold the final diagnostic info on screen briefly before animation
+  // delay(1500); // Hold the final diagnostic info on screen briefly before animation
   startupAnimation();
   
   // Wait for satellite geometry lock
@@ -124,35 +127,38 @@ void setup()
   u8g2.drawStr(0, 40, rateString);
   u8g2.sendBuffer();
 
-  while (!myGNSS.getGnssFixOk() && myGNSS.getSIV() < 2) {
+  while (!myGNSS.getGnssFixOk() && (myGNSS.packetUBXNAVPVT ->data.numSV < 4)) {
     delay(2000);
     // Dynamic text update while looping for lock
     u8g2.clearBuffer();
     u8g2.drawStr(0, 24, "Acquiring Satellites...");
     char sivString[16];
-    sprintf(sivString, "SIV Count: %d", myGNSS.getSIV());
+    sprintf(sivString, "SIV Count: %d", myGNSS.packetUBXNAVPVT ->data.numSV);
     u8g2.drawStr(0, 40, sivString);
     u8g2.sendBuffer();
     
-    startupAnimation();
+    // startupAnimation();
   }
   
   // Satellites connected successfully
   Serial.print("Sat Connected: ");
-  Serial.println(myGNSS.getSIV());
+  Serial.println(myGNSS.packetUBXNAVPVT ->data.numSV);
   delay(1000);
   u8g2.clearBuffer();
   u8g2.drawStr(0, 24, "GNSS Lock Confirmed!");
   char finalSiv[16];
-  sprintf(finalSiv, "Active SIV: %d", myGNSS.getSIV());
+  sprintf(finalSiv, "Active SIV: %d", myGNSS.packetUBXNAVPVT ->data.numSV);
   u8g2.drawStr(0, 40, finalSiv);
+  u8g2.drawStr(0, 56, "Getting TimeDate.");
   u8g2.sendBuffer();
-  delay(1500);
+  startupAnimation();
   
   if(myGNSS.getHour() > 2 && myGNSS.getHour() < 15){
     setBrightness = 90;
+    u8g2.setContrast(100);
   } else {
     setBrightness = 255;
+    u8g2.setContrast(255);
   }
 
   // Pin the LED strip updating process to Core 0 (GPS & Main Loop stay on Core 1)
@@ -186,13 +192,20 @@ void loop()
   else {
     // Continuous Polling: checkUblox() parses incoming packets in the I2C buffer
     if (myGNSS.checkUblox()) {
-      
+      float pitchRad = 0;
+      float rollRad  = 0;
+      if (myGNSS.packetUBXHNRATT != NULL) {
+          // u-blox provides these in degrees * 1e-5. Convert to Radians for sin()
+        // Serial.print("gotdata");
+        pitchRad = ((float)myGNSS.packetUBXHNRATT->data.pitch / 100000.0f) * (PI / 180.0f);
+        rollRad  = ((float)myGNSS.packetUBXHNRATT->data.roll  / 100000.0f) * (PI / 180.0f);
+      }
       // 1. Update velocity from High Navigation Rate PVT (in mm/s)
       velocity = myGNSS.packetUBXHNRPVT->data.gSpeed;
       float rawLat = myGNSS.packetUBXHNRINS->data.yAccel; 
-      accel_lat = (rawLat / 100.0) / 9.81;
+      accel_lat = ((rawLat / 100.0) / 9.81) + (sin(rollRad));
       float rawLong = myGNSS.packetUBXHNRINS->data.xAccel; 
-      accel_long = (rawLong / 100.0) / 9.81;
+      accel_long = ((rawLong / 100.0) / 9.81) - sin(pitchRad);
       float totalAccel = sqrtf((accel_lat * accel_lat)+ (accel_long * accel_long));
       uint8_t fusionMode = 0; 
       uint8_t alignStatus = 0;
@@ -212,40 +225,49 @@ void loop()
       if (SERIALECHO) {
         Serial.print(F("Speed: ")); Serial.print(velocity / 447.04);
         Serial.print(F(" | LongG: ")); Serial.print(accel_long);
-        Serial.print(F(" | LatG: ")); Serial.println(accel_lat);
+        Serial.print(F(" | LatG: ")); Serial.print(accel_lat);
+        Serial.print("| P: "); Serial.print(pitchRad * 180.0/PI); 
+        Serial.print(" | R: "); Serial.println(rollRad * 180.0/PI);
+
       }
 
       // --- OLED DISPLAY UPDATE (LEFT: TEXT | RIGHT: G-FORCE PLOT) ---
       u8g2.clearBuffer();
       
       // 1. DRAW SPEED (Left Side)
-      u8g2.setFont(u8g2_font_logisoso28_tf); 
-      
+      // velocity = 123.467*447.04; //test
       // Calculate fixed-point components
       int32_t mphTimesTen = (velocity * 10) / 447.04;
       int32_t wholeMPH = mphTimesTen / 10;
       int32_t tenthsMPH = mphTimesTen % 10;
 
       // Format string explicitly: "60.5"
-      char speedString[16];
-      sprintf(speedString, "%d.%d", wholeMPH, tenthsMPH);
-      u8g2.drawStr(0, 30, speedString);
+      u8g2.setFont(u8g2_font_logisoso32_tf); 
+      char wholeString[16];
+      sprintf(wholeString, "%d", wholeMPH);
+      u8g2.drawStr(0, 32, wholeString);
+
+      int nextX = u8g2.getStrWidth(wholeString);
+      char tenthsString[8];
+      sprintf(tenthsString, ".%d", tenthsMPH);
+      u8g2.setFont(u8g2_font_logisoso16_tf); 
+      u8g2.drawStr(nextX + 2, 32, tenthsString);
       
-      u8g2.setFont(u8g2_font_profont11_tr); //6pt font
-      u8g2.drawStr(92, 10, "MPH");
+      u8g2.setFont(u8g2_font_profont10_tr); //6pt font
+      u8g2.drawStr(2, 45 , "MPH");
 
 
       // 2. DRAW NUMERICAL Gs (Left Side Bottom)
       char gString[64];
-      sprintf(gString, "%.2f G", totalAccel);
-      u8g2.setFont(u8g2_font_6x10_tf);
-      u8g2.drawStr(92, 64, gString);
+      sprintf(gString, "%.2f", totalAccel);
+      u8g2.setFont(u8g2_font_8x13_tf);
+      u8g2.drawStr(94, 12, gString);
 
       // 3. DRAW G-FORCE PLOT (Right Side)
-      int maxRadius = 16; // Reduced from 24 to 16 pixels
-      int centerX = 108; // Shifted right from 96 to 108 to hug the screen edge cleanly
-      int centerY = 32;  // Keeps the circle perfectly centered vertically
-      float maxG = 1.0;   // Keeps the outer edge mapped to 1.0G
+      int maxRadius = 18; // Reduced from 24 to 16 pixels
+      int centerX = 109; // Shifted right from 96 to 108 to hug the screen edge cleanly
+      int centerY = 35;  // Keeps the circle perfectly centered vertically
+      float maxG = 0.9;   // Keeps the outer edge mapped to 1.0G
       int dotSize = 2; //px for g dot
 
       // Draw the outer boundary circle
@@ -256,10 +278,6 @@ void loop()
       u8g2.drawLine(centerX - 3, centerY, centerX + 3, centerY);
       u8g2.drawLine(centerX, centerY - 3, centerX, centerY + 3);
 
-      // Map G-Force values to pixel offsets.
-      // - Lateral (X) map: Positive is Right, Negative is Left
-      // - Longitudinal (Y) map: Positive is Acceleration (Up/Forward), Negative is Braking (Down/Back)
-      // Note: On OLEDs, coordinate Y=0 is the TOP of the screen, so we invert the Y axis (-=).
       float targetX = centerX + (accel_lat / maxG) * maxRadius;
       float targetY = centerY - (accel_long / maxG) * maxRadius;
 
@@ -274,40 +292,29 @@ void loop()
         targetY = centerY + (dy / distance) * maxRadius;
       }
 
-      // Draw the dynamic G-force "bubble" (a filled 3px radius circle)
+    
       u8g2.drawDisc(round(targetX), round(targetY), dotSize, U8G2_DRAW_ALL);
       // --- SMALL BOOT/STATUS INDICATORS (Bottom Edge) ---
-      u8g2.setFont(u8g2_font_04b_03_tr); // Ultra-micro 5px tall font
+      u8g2.setFont(u8g2_font_04b_03_tr); // Ultra-micro 5px tall fontu8g2_font_04b_03_tr
 
       // Draw Satellite Count (Bottom Left, right next to your G-Force string)
       char satString[10];
-      sprintf(satString, "SAT:%d", satCount);
-      u8g2.drawStr(0, 64, satString);
+      sprintf(satString, " ST:%d", satCount);
+      u8g2.drawStr(85, 64, satString);
 
       // Draw Fusion Status Token (Bottom Middle/Right depending on layout space)
       // We map modes to quick strings: INIT, FIX (Operational), or DR (Dead Reckoning Only)
       if (fusionMode == 1) {
-        u8g2.drawStr(40, 64, "LOCK");
+        u8g2.drawStr(111, 64, "LOCK");
       } else if (fusionMode == 2) {
-        u8g2.drawStr(40, 64, "DR");
+        u8g2.drawStr(111, 64, "DR");
       } else {
-        u8g2.drawStr(40, 64, "INIT");
+        u8g2.drawStr(111, 64, "INIT");
       }
 
-      // Existing final call to update the physical screen
       u8g2.sendBuffer(); 
     }
   }
-
-  // --- ACCELERATION CALCULATION (DISABLED - Now using raw IMU values above) ---
-  /*
-  if(millis() - lastTime3 > 30){ 
-    float currentVelocity = velocity; 
-    accel = (((currentVelocity - oldVelocity)/(2.237*447.04))/((millis()-lastTime3)/1000.0))/9.81;
-    oldVelocity = currentVelocity; 
-    lastTime3 = millis();
-  }
-  */
 }
 
 // --- CORE 0: DEDICATED LED ANIMATION ENGINE ---
