@@ -7,16 +7,39 @@
 #define LED_PIN 32
 #define GPS_SDA 21
 #define GPS_SCL 22
-#define SERIALECHO true
+#define SERIALECHO false
 #define TESTDATA false
+
 #define NAV_RATE 1
 #define HNR_RATE 30
+
+#define STAGING_TIMER 2000 //ms for stage wait
+#define ABORT_TIMER 10000// ms for idle wait
+#define COMPLETE_DISMISS_TIMEOUT 20000//ms for launch completed
+#define LAUNCH_TIMEOUT 10000//ms to launch timeout
+
 #define FRAMETIME 16 // ~60Hz refresh rate (1000ms / 60)
 
 SFE_UBLOX_GNSS myGNSS;
 CRGBArray<LED_COUNT> leds;
 U8G2_SSD1309_128X64_NONAME0_F_4W_HW_SPI u8g2(U8G2_R2, /* cs= */ 5, /* dc= */ 17, /* reset= */ 16);
 
+enum LaunchState { 
+  STATE_IDLE, 
+  STATE_STAGING, 
+  STATE_READY, 
+  STATE_IN_PROGRESS, 
+  STATE_60_COMPLETE,
+  STATE_ABORT 
+};
+LaunchState currentLaunchState = STATE_IDLE;
+
+uint32_t stoppedTimerStart = 0;
+uint32_t launchTimerStart = 0;
+uint32_t abortTimerStart = 0;
+uint32_t completeTimerStart = 0;
+
+float timeTo60 = 0.0f;
 
 uint16_t hueValue = 0;
 int setBrightness = 155; 
@@ -79,7 +102,6 @@ void setup()
   myGNSS.setAutoHNRATT(true);
   myGNSS.setAutoHNRINS(true); 
   myGNSS.setAutoHNRPVT(true); 
-  myGNSS.setAutoPVT(true);   // Ensures NAV-PVT (speed, sats, etc) sent automatically
   myGNSS.setAutoESFSTATUS(true);
   myGNSS.setAutoESFALG(true);
 
@@ -207,8 +229,14 @@ void loop()
       float rawLong = myGNSS.packetUBXHNRINS->data.xAccel; 
       accel_long = ((rawLong / 100.0) / 9.81) - sin(pitchRad);
       float totalAccel = sqrtf((accel_lat * accel_lat)+ (accel_long * accel_long));
+      float currentSpeed = velocity/447.04;
+      int32_t mphTimesTen = (currentSpeed * 10);
+      int32_t wholeMPH = mphTimesTen / 10;
+      int32_t tenthsMPH = mphTimesTen % 10;
+      
       uint8_t fusionMode = 0; 
       uint8_t alignStatus = 0;
+
       if (myGNSS.packetUBXESFSTATUS != NULL) {
         // 0 = Initializing, 1 = Fusion Operational, 2 = Suspended/Dead Reckoning Only
         fusionMode = myGNSS.packetUBXESFSTATUS->data.fusionMode;
@@ -218,6 +246,88 @@ void loop()
       if (myGNSS.packetUBXNAVPVT != NULL){
         satCount = myGNSS.packetUBXNAVPVT ->data.numSV;
       }
+      
+  
+
+      // Global Abort Check: If we are actively launching and hit negative longitudinal Gs, immediately cut it
+      if (currentLaunchState == STATE_IN_PROGRESS && accel_long < 0.0f) {
+          currentLaunchState = STATE_ABORT;
+          abortTimerStart = millis();
+          Serial.println("LAUNCH ABORTED: NEGATIVE G DETECTED");
+      }
+
+      switch (currentLaunchState) {
+        
+        case STATE_IDLE:
+            // Waiting state. If we drop below 0.3 MPH, check if fusion is ready to move to Staging
+            if (currentSpeed < 0.1f) {
+                if (fusionMode == 1) { //fusion ready
+                    currentLaunchState = STATE_STAGING;
+                    stoppedTimerStart = millis(); // Start tracking the 3-second window
+                    Serial.println("STATUS: STAGING - FUSION READY, HOLDING FOR 3S");
+                }
+            }
+            break;
+
+        case STATE_STAGING:
+            // Must stay under 0.3 MPH to progress to READY
+            if (currentSpeed < 0.3f) {
+                if (millis() - stoppedTimerStart >= STAGING_TIMER) {
+                    currentLaunchState = STATE_READY;
+                    timeTo60 = 0.0f;
+                    Serial.println("STATUS: LAUNCH READY - AWAITING TRIGGER (<3MPH & >0.5G)");
+                }
+            } else {
+                // If the car moves or rolls before the 3s is up, revert to IDLE
+                currentLaunchState = STATE_IDLE;
+            }
+            break;
+
+        case STATE_READY:
+            // Waiting for the launch trigger conditions: under 3MPH and a heavy G spike
+            if (currentSpeed <= 3.0f) {
+                if (accel_long > 0.6f) {
+                    launchTimerStart = millis();
+                    currentLaunchState = STATE_IN_PROGRESS;
+                    Serial.println("STATUS: LAUNCH IN PROGRESS!");
+                }
+            } else {
+                // If you cruise away smoothly and cross 3MPH without hitting 0.5G, reset to IDLE
+                currentLaunchState = STATE_IDLE;
+            }
+            break;
+
+        case STATE_IN_PROGRESS:
+            // Clock is ticking. Check if we hit the finish line.
+            if (currentSpeed >= 60.0f) {
+                timeTo60 = (float)(millis() - launchTimerStart) / 1000.0f;
+                completeTimerStart = millis();
+                currentLaunchState = STATE_60_COMPLETE;
+                Serial.print("STATUS: LAUNCH 60 COMPLETE! Time: "); Serial.println(timeTo60);
+            }
+            else if(millis() - launchTimerStart > LAUNCH_TIMEOUT){
+                Serial.println("STATUS: LAUNCH TIMEOUT");
+                currentLaunchState = STATE_IDLE;
+            }
+            break;
+
+        case STATE_60_COMPLETE:
+            // Report time on screen. Once you come back to a complete stop, it resets back to IDLE
+            if (currentSpeed < 0.1f || (millis() - completeTimerStart > COMPLETE_DISMISS_TIMEOUT)) {
+                currentLaunchState = STATE_IDLE;
+                Serial.println("STATUS: RESULTS DISMISSED -> REVERTED TO IDLE");
+            }
+            break;
+
+        case STATE_ABORT:
+            // Stay in abort status for 3 seconds before reverting to IDLE
+            if (millis() - abortTimerStart >= ABORT_TIMER) {
+                currentLaunchState = STATE_IDLE;
+                Serial.println("STATUS: REVERTED TO IDLE FROM ABORT");
+            }
+            break;
+    }
+      
       
       // Mark the HNR INS data as read/stale so we only process fresh packets
       myGNSS.flushHNRINS();
@@ -237,9 +347,6 @@ void loop()
       // 1. DRAW SPEED (Left Side)
       // velocity = 123.467*447.04; //test
       // Calculate fixed-point components
-      int32_t mphTimesTen = (velocity * 10) / 447.04;
-      int32_t wholeMPH = mphTimesTen / 10;
-      int32_t tenthsMPH = mphTimesTen % 10;
 
       // Format string explicitly: "60.5"
       u8g2.setFont(u8g2_font_logisoso32_tf); 
@@ -256,7 +363,7 @@ void loop()
       u8g2.setFont(u8g2_font_profont10_tr); //6pt font
       u8g2.drawStr(2, 45 , "MPH");
 
-
+      drawLaunchStatus();
       // 2. DRAW NUMERICAL Gs (Left Side Bottom)
       char gString[64];
       sprintf(gString, "%.2f", totalAccel);
@@ -340,15 +447,6 @@ void LEDTask(void * pvParameters){
 void fastLEDHandler(float currentVelocity, bool usePalette){
   int firstPixelHue;
   firstPixelHue = map(currentVelocity * 100.0, 0, 6000, 16500, -9600) / 100.0;
-  // if (currentVelocity < 60){
-  //   firstPixelHue = map(currentVelocity * 100.0, 0, 6000, 16000, 8000) / 100.0;
-  // }
-  // else if (currentVelocity < 100){
-  //   firstPixelHue = map(currentVelocity * 100.0, 6000, 10000, 8000, 0) / 100.0;
-  // }
-  // else{
-  //   firstPixelHue = map(currentVelocity * 100.0, 10000, 14000, 0, -7000) / 100.0;
-  // }
 
   for(int i = 0; i < LED_COUNT/2 + 1; i++) { 
     int pixelHue = firstPixelHue + (i * 255 * (0.225 + 0.5 * currentVelocity / 150) / LED_COUNT);
@@ -356,6 +454,94 @@ void fastLEDHandler(float currentVelocity, bool usePalette){
     leds(LED_COUNT/2, LED_COUNT - 1) = leds(LED_COUNT/2 - 1, 0);
   }
   FastLED.show();
+}
+
+void drawLaunchStatus() {
+  static int statusX = 20;
+  static int statusY = 45;
+
+  // Clear space or draw a separation line if necessary
+  switch (currentLaunchState) {
+    
+    case STATE_IDLE:
+      // u8g2.setFont(u8g2_font_profont10_tr); //6pt font
+      // u8g2.drawStr(statusX, statusY, "IDLE");
+      // Keep screen clean or show a subtle status if you like. 
+      // If we are moving normally, we leave this blank so the speedometer takes priority.
+      break;
+
+    case STATE_STAGING:
+      u8g2.setFont(u8g2_font_profont10_tr); //6pt font
+      // Visual progress bar showing how close you are to the 3-second hold mark
+      {
+        long elapsed = millis() - stoppedTimerStart;
+        if(elapsed>STAGING_TIMER*0.75){
+          u8g2.drawStr(statusX, statusY, "STAGING");  
+        }
+        else if(elapsed>STAGING_TIMER*0.5){
+          u8g2.drawStr(statusX, statusY, "STAGING |");
+        }
+        else if(elapsed>STAGING_TIMER*0.25){
+          u8g2.drawStr(statusX, statusY, "STAGING ||");
+        }
+        else{
+          u8g2.drawStr(statusX, statusY, "STAGING |||");
+        }
+      }
+      break;
+
+    case STATE_READY:
+      {
+      // High-visibility inverted text box so it pops out at the driver
+      u8g2.setFont(u8g2_font_profont10_tr); //6pt font
+      // u8g2.setFont(u8g2_font_6x10_tf);
+      u8g2.drawBox(statusX, statusY - 9, 62, 11); 
+      
+      u8g2.setDrawColor(0); // Set color to black (to draw inside white box)
+      u8g2.drawStr(statusX+5, statusY, "LAUNCH RDY");
+      u8g2.setDrawColor(1); // Reset back to white
+      u8g2.setFont(u8g2_font_profont15_mn); 
+      u8g2.drawStr(0, 64, "0.00s");
+      }
+      break;
+
+    case STATE_IN_PROGRESS:
+      {
+      u8g2.setFont(u8g2_font_profont10_tr); //6pt font
+      if ((millis() / 200) % 2 == 0) {
+        u8g2.drawStr(statusX, statusY, "LAUNCHING");
+      }
+      // u8g2.setFont(u8g2_font_7x14_tf); // Use a slightly chunkier, readable font
+      
+      float liveTimer = (float)(millis() - launchTimerStart) / 1000.0f;
+      u8g2.setFont(u8g2_font_profont15_mn); 
+      char liveStr[16];
+      sprintf(liveStr, "%.2fs", liveTimer);
+      u8g2.drawStr(0, 64, liveStr);
+      }
+      break;
+
+    case STATE_60_COMPLETE:
+      u8g2.setFont(u8g2_font_profont10_tr); //6pt font
+      u8g2.drawStr(statusX, statusY, "LAUNCH OK");
+      char resultStr[32];
+      u8g2.setFont(u8g2_font_profont15_mn); 
+      sprintf(resultStr, "%.2fs to 60", timeTo60);
+      if ((millis() / 500) % 2 == 0) {
+        u8g2.drawStr(0, 64, resultStr);
+      }
+      // Optional: draw a tiny trophy icon or border around the time
+      // u8g2.drawFrame(0, yPos - 11, 128, 13);
+      break;
+
+    case STATE_ABORT:
+      // Flashing alert using millis() tracking
+      if ((millis() / 500) % 2 == 0) {
+        u8g2.setFont(u8g2_font_profont10_tr); //6pt font
+        u8g2.drawStr(statusX, statusY, "ABORTED");
+      }
+      break;
+  }
 }
 
 void startupAnimation(){
