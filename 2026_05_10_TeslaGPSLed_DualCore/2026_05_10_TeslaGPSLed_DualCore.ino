@@ -420,7 +420,7 @@ void loop()
         u8g2.setFont(u8g2_font_logisoso34_tn); //was 32
         char wholeString[16];
         sprintf(wholeString, "%d", wholeMPH);
-        u8g2.drawStr(0, 32, wholeString);
+        u8g2.drawStr(0, 34, wholeString);
 
         int nextX = u8g2.getStrWidth(wholeString);
         char tenthsString[8];
@@ -429,51 +429,53 @@ void loop()
         u8g2.drawStr(nextX + 1, 32, tenthsString);
         
         u8g2.setFont(u8g2_font_profont10_tr); //6pt font
-        u8g2.drawStr(2, 45 , "MPH");
+        u8g2.drawStr(2, 47 , "MPH");
 
         drawLaunchStatus();
         // 2. DRAW NUMERICAL Gs (Left Side Bottom)
-        char gString[64];
-        if (totalAccel < 1.0f) {
-          sprintf(gString, ".%02d G", (int)(totalAccel * 100)); 
-        } else {
-          // Fallback for when you pull 1.0G or more
-          sprintf(gString, "%.2f G", totalAccel); 
-        }
-        u8g2.setFont(u8g2_font_profont17_mn);
-        u8g2.drawStr(97, 12, gString);
+        if (fusionMode == 1) {
+          char gString[64];
+          if (totalAccel < 1.0f) {
+            sprintf(gString, ".%02d G", (int)(totalAccel * 100)); 
+          } else {
+            // Fallback for when you pull 1.0G or more
+            sprintf(gString, "%.2f G", totalAccel); 
+          }
+          u8g2.setFont(u8g2_font_profont17_mn);
+          u8g2.drawStr(97, 12, gString);
 
-        // 3. DRAW G-FORCE PLOT (Right Side)
-        int maxRadius = 18; // Reduced from 24 to 16 pixels
-        int centerX = 109; // Shifted right from 96 to 108 to hug the screen edge cleanly
-        int centerY = 35;  // Keeps the circle perfectly centered vertically
-        float maxG = 0.9;   // Keeps the outer edge mapped to 1.0G
-        int dotSize = 2; //px for g dot
+          // 3. DRAW G-FORCE PLOT (Right Side)
+          int maxRadius = 18; // Reduced from 24 to 16 pixels
+          int centerX = 109; // Shifted right from 96 to 108 to hug the screen edge cleanly
+          int centerY = 35;  // Keeps the circle perfectly centered vertically
+          float maxG = 0.9;   // Keeps the outer edge mapped to 1.0G
+          int dotSize = 2; //px for g dot
 
-        // Draw the outer boundary circle
-        u8g2.drawCircle(centerX, centerY, maxRadius, U8G2_DRAW_ALL);
+          // Draw the outer boundary circle
+          u8g2.drawCircle(centerX, centerY, maxRadius, U8G2_DRAW_ALL);
+          
+          // Draw inner target crosshairs (center point indicator)
+          u8g2.drawPixel(centerX, centerY);
+          u8g2.drawLine(centerX - 3, centerY, centerX + 3, centerY);
+          u8g2.drawLine(centerX, centerY - 3, centerX, centerY + 3);
+
+          float targetX = centerX + (accel_lat / maxG) * maxRadius;
+          float targetY = centerY - (accel_long / maxG) * maxRadius;
+
+          // Constrain the dot to stay strictly within our max boundary circle using trigonometry (Vector Magnitude)
+          float dx = targetX - centerX;
+          float dy = targetY - centerY;
+          float distance = sqrt(dx*dx + dy*dy);
+
+          if (distance > maxRadius) {
+            // Force the coordinate back onto the perimeter of the boundary circle
+            targetX = centerX + (dx / distance) * maxRadius;
+            targetY = centerY + (dy / distance) * maxRadius;
+          }
+
         
-        // Draw inner target crosshairs (center point indicator)
-        u8g2.drawPixel(centerX, centerY);
-        u8g2.drawLine(centerX - 3, centerY, centerX + 3, centerY);
-        u8g2.drawLine(centerX, centerY - 3, centerX, centerY + 3);
-
-        float targetX = centerX + (accel_lat / maxG) * maxRadius;
-        float targetY = centerY - (accel_long / maxG) * maxRadius;
-
-        // Constrain the dot to stay strictly within our max boundary circle using trigonometry (Vector Magnitude)
-        float dx = targetX - centerX;
-        float dy = targetY - centerY;
-        float distance = sqrt(dx*dx + dy*dy);
-
-        if (distance > maxRadius) {
-          // Force the coordinate back onto the perimeter of the boundary circle
-          targetX = centerX + (dx / distance) * maxRadius;
-          targetY = centerY + (dy / distance) * maxRadius;
+          u8g2.drawDisc(round(targetX), round(targetY), dotSize, U8G2_DRAW_ALL);
         }
-
-      
-        u8g2.drawDisc(round(targetX), round(targetY), dotSize, U8G2_DRAW_ALL);
         // --- SMALL BOOT/STATUS INDICATORS (Bottom Edge) ---
         u8g2.setFont(u8g2_font_04b_03_tr); // Ultra-micro 5px tall fontu8g2_font_04b_03_tr
 
@@ -532,7 +534,7 @@ void fastLEDHandler(float currentVelocity, bool usePalette){
   firstPixelHue = map(currentVelocity * 100.0, 0, 6000, 16500, -9600) / 100.0;
 
   for(int i = 0; i < LED_COUNT/2 + 1; i++) { 
-    int pixelHue = firstPixelHue + (i * 255 * (0.225 + 0.5 * currentVelocity / 150) / LED_COUNT);
+    int pixelHue = firstPixelHue + (i * 255 * (0.225 + 0.85 * currentVelocity / 150) / LED_COUNT);
     leds[LED_COUNT/2 - i] = CHSV(pixelHue, 255, setBrightness);
     leds(LED_COUNT/2, LED_COUNT - 1) = leds(LED_COUNT/2 - 1, 0);
   }
@@ -541,7 +543,7 @@ void fastLEDHandler(float currentVelocity, bool usePalette){
 
 void drawLaunchStatus() {
   static int statusX = 20;
-  static int statusY = 45;
+  static int statusY = 47;
 
   // Clear space or draw a separation line if necessary
   switch (currentLaunchState) {
